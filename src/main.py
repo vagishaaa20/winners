@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-import os, time, httpx
+import os
+import time
+import httpx
 from openai import AsyncOpenAI
 
 from src.session_manager import sessions, create_session
@@ -24,63 +26,147 @@ OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# ── Scam classification helpers ───────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Scam classification helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
 SCAM_TYPE_KEYWORDS = {
-    "Financial Fraud": ["bank", "account", "transfer", "otp", "upi", "payment", "transaction", "fund"],
-    "Phishing":        ["link", "click", "verify", "login", "password", "portal", "website", "http"],
-    "Identity Theft":  ["aadhaar", "pan", "passport", "identity", "kyc", "document", "id proof"],
-    "Romance Scam":    ["love", "relationship", "lonely", "meet", "date", "feelings", "trust me"],
-    "Lottery Scam":    ["won", "prize", "lottery", "congratulations", "claim", "reward", "winner"],
+    "Financial Fraud": [
+        "bank", "account", "otp", "upi", "transfer", "payment",
+        "blocked", "freeze", "suspend", "transaction", "fund",
+    ],
+    "Phishing": [
+        "link", "verify", "login", "password", "website", "http",
+        "portal", "redirect", "url", "form",
+    ],
+    "Identity Theft": [
+        "aadhaar", "pan", "passport", "kyc", "identity",
+        "document", "id proof",
+    ],
+    "Romance Scam": [
+        "love", "relationship", "trust", "gift", "meet", "feelings",
+    ],
+    "Lottery Scam": [
+        "lottery", "prize", "winner", "reward", "claim",
+    ],
+    "Tech Support": [
+        "computer", "virus", "microsoft", "apple", "remote",
+        "software", "device",
+    ],
+    "Investment Scam": [
+        "invest", "profit", "return", "crypto", "trading", "scheme",
+    ],
 }
+
+SCAM_INDICATOR_KEYWORDS = [
+    "urgent", "immediately", "otp", "one time password", "verify",
+    "blocked", "freeze", "suspended", "compromised",
+    "account", "transfer", "upi", "payment",
+    "click", "link", "http", "kyc", "aadhaar", "pan",
+    "prize", "lottery", "winner", "fee", "deposit",
+    "invest", "crypto", "password", "login", "remote",
+    "virus", "case id", "reference", "ticket",
+    "legal", "police", "arrest", "refund", "cashback",
+]
+
+RED_FLAG_KEYWORDS = [
+    "urgent", "immediately", "otp", "pin", "password",
+    "blocked", "freeze", "suspend", "compromised",
+    "click", "link", "http",
+    "transfer", "send money", "deposit",
+    "case id", "reference", "legal", "police", "arrest",
+    "prize", "won", "lottery",
+]
 
 def detect_scam_type(intel: dict, history_text: str) -> str:
     text = history_text.lower()
+
     if intel.get("phishingLinks"):
         return "Phishing"
-    if intel.get("bankAccounts") or intel.get("upiIds") or intel.get("phoneNumbers"):
-        return "Financial Fraud"
+
+    scores = {}
     for scam_type, keywords in SCAM_TYPE_KEYWORDS.items():
-        if any(kw in text for kw in keywords):
-            return scam_type
-    return "Unknown"
+        score = sum(1 for kw in keywords if kw in text)
+        if score > 0:
+            scores[scam_type] = score
+
+    if scores:
+        return max(scores, key=scores.get)
+
+    return "Financial Fraud"
+
+
+def is_scam_detected(intel: dict, history_text: str) -> bool:
+    text = history_text.lower()
+    keyword_hits = sum(1 for kw in SCAM_INDICATOR_KEYWORDS if kw in text)
+    has_extracted_intel = any(
+        v for v in intel.values() if isinstance(v, list) and v
+    )
+    return keyword_hits >= 1 or has_extracted_intel
+
 
 def detect_confidence(intel: dict, count: int) -> str:
-    hits = sum(len(v) for v in intel.values() if isinstance(v, list))
-    if hits >= 3 or count >= 12:
+    hits = sum(len(v) for v in intel.values() if isinstance(v, list) and v)
+    if hits >= 3 or count >= 10:
         return "High"
     if hits >= 1 or count >= 6:
         return "Medium"
     return "Low"
 
-def build_notes(intel: dict, scam_type: str) -> str:
+
+def count_red_flags(history_text: str) -> int:
+    text = history_text.lower()
+    return sum(1 for flag in RED_FLAG_KEYWORDS if flag in text)
+
+
+def build_notes(intel: dict, scam_type: str, history_text: str) -> str:
+    red_flags = count_red_flags(history_text)
+
     parts = []
     if intel.get("phoneNumbers"):
         parts.append(f"phone number(s): {', '.join(intel['phoneNumbers'])}")
     if intel.get("bankAccounts"):
-        parts.append(f"bank account(s): {', '.join(intel['bankAccounts'])}")
+        parts.append(f"bank account number(s): {', '.join(intel['bankAccounts'])}")
     if intel.get("upiIds"):
         parts.append(f"UPI ID(s): {', '.join(intel['upiIds'])}")
     if intel.get("phishingLinks"):
         parts.append(f"phishing link(s): {', '.join(intel['phishingLinks'])}")
     if intel.get("emailAddresses"):
-        parts.append(f"email(s): {', '.join(intel['emailAddresses'])}")
-    if parts:
-        return f"{scam_type} detected. Scammer exposed: {'; '.join(parts)}."
-    return "Conversation ongoing — no identifiers extracted yet."
+        parts.append(f"email address(es): {', '.join(intel['emailAddresses'])}")
+    if intel.get("caseIds"):
+        parts.append(f"case/reference ID(s): {', '.join(intel['caseIds'])}")
+    if intel.get("policyNumbers"):
+        parts.append(f"policy number(s): {', '.join(intel['policyNumbers'])}")
+    if intel.get("orderIds"):
+        parts.append(f"order ID(s): {', '.join(intel['orderIds'])}")
 
-# ── Final result submission ───────────────────────────────────────────────────
+    intel_summary = (
+        "Information shared includes: " + "; ".join(parts) + ". "
+        if parts else "No explicit identifiers extracted yet. "
+    )
+
+    return (
+        f"Conversation exhibits indicators consistent with a potential "
+        f"{scam_type.lower()} scenario. "
+        f"Red flags identified: {red_flags}. "
+        + intel_summary
+        + "The interaction focused on maintaining engagement and observing information shared over time."
+    )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Final submission
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def send_final(session_id: str, s: dict):
-    duration   = max(180, int(time.time() - s["startTime"]))
-    scam_type  = detect_scam_type(s["intel"], s.get("historyText", ""))
+    duration = int(time.time() - s["startTime"])
+    scam_type = detect_scam_type(s["intel"], s.get("historyText", ""))
     confidence = detect_confidence(s["intel"], s["count"])
-    notes      = build_notes(s["intel"], scam_type)
+    notes = build_notes(s["intel"], scam_type, s.get("historyText", ""))
 
     payload = {
-        "sessionId":                 session_id,
-        "scamDetected":              True,
-        "totalMessagesExchanged":    s["count"],
+        "sessionId": session_id,
+        "scamDetected": is_scam_detected(s["intel"], s.get("historyText", "")),
+        "totalMessagesExchanged": s["count"],
         "engagementDurationSeconds": duration,
         "extractedIntelligence": {
             "phoneNumbers":   s["intel"]["phoneNumbers"],
@@ -88,9 +174,12 @@ async def send_final(session_id: str, s: dict):
             "upiIds":         s["intel"]["upiIds"],
             "phishingLinks":  s["intel"]["phishingLinks"],
             "emailAddresses": s["intel"]["emailAddresses"],
+            "caseIds":        s["intel"]["caseIds"],
+            "policyNumbers":  s["intel"]["policyNumbers"],
+            "orderIds":       s["intel"]["orderIds"],
         },
-        "agentNotes":      notes,
-        "scamType":        scam_type,
+        "agentNotes": notes,
+        "scamType": scam_type,
         "confidenceLevel": confidence,
     }
 
@@ -100,17 +189,20 @@ async def send_final(session_id: str, s: dict):
                 "https://hackathon.guvi.in/api/updateHoneyPotFinalResult",
                 json=payload,
             )
-    except Exception as e:
-        print("[send_final] Failed:", e)
+    except Exception:
+        pass
 
-# ── Main endpoint ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Main endpoint
+# ─────────────────────────────────────────────────────────────────────────────
 
+@app.post("/honeypot")
 @app.post("/honeypot/message")
 async def honeypot_message(
     request: Request,
     x_api_key: str = Header(None, alias="x-api-key"),
 ):
-    if x_api_key != HONEYPOT_API_KEY:
+    if HONEYPOT_API_KEY and x_api_key != HONEYPOT_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key.")
 
     try:
@@ -119,7 +211,7 @@ async def honeypot_message(
         return {"status": "success", "reply": "Could you please repeat that?"}
 
     session_id = data.get("sessionId", "default")
-    msg        = data.get("message", {}).get("text", "")
+    msg = data.get("message", {}).get("text", "")
 
     if not msg:
         return {"status": "success", "reply": "Could you clarify your message?"}
@@ -130,48 +222,59 @@ async def honeypot_message(
     s = sessions[session_id]
     s["count"] += 1
 
-    history      = data.get("conversationHistory", [])
-    formatted    = []
+    history = data.get("conversationHistory", [])
+    formatted = []
+    new_texts = []
 
-    for h in history:
+    already_processed = s.get("processedHistoryCount", 0)
+
+    for i, h in enumerate(history):
         role = "assistant" if h.get("sender") in ["user", "victim"] else "user"
-        formatted.append({"role": role, "content": h.get("text", "")})
-        extract_intel(h.get("text", ""), s["intel"])
+        text = h.get("text", "")
+        formatted.append({"role": role, "content": text})
+        if i >= already_processed:
+            extract_intel(text, s["intel"])
+            new_texts.append(text)
+
+    s["processedHistoryCount"] = len(history)
+
     extract_intel(msg, s["intel"])
+    new_texts.append(msg)
+    s["historyText"] = s.get("historyText", "") + " " + " ".join(new_texts)
 
-    reply = await agent_reply(client, formatted, msg)
+    reply = await agent_reply(client, formatted, msg, s["count"])
 
-    scam_type  = detect_scam_type(s["intel"], "")
-    s["notes"] = build_notes(s["intel"], scam_type)
+    scam_type = detect_scam_type(s["intel"], s["historyText"])
+    confidence = detect_confidence(s["intel"], s["count"])
+    s["notes"] = build_notes(s["intel"], scam_type, s["historyText"])
+
+    duration = int(time.time() - s["startTime"])
 
     if not s["final"] and s["count"] >= 10:
         await send_final(session_id, s)
         s["final"] = True
 
-    confidence = detect_confidence(s["intel"], s["count"])
-
     return {
-        "status":  "success",
-        "reply":   reply,
-        # Required
-        "sessionId":              session_id,
-        "scamDetected":           bool(any(v for v in s["intel"].values() if isinstance(v, list) and v)),
-        "totalMessagesExchanged":    s["count"],
-        "engagementDurationSeconds": max(180, int(time.time() - s["startTime"])),
+        "status": "success",
+        "reply": reply,
+        "sessionId": session_id,
+        "scamDetected": is_scam_detected(s["intel"], s["historyText"]),
+        "totalMessagesExchanged": s["count"],
+        "engagementDurationSeconds": duration,
         "extractedIntelligence": {
             "phoneNumbers":   s["intel"]["phoneNumbers"],
             "bankAccounts":   s["intel"]["bankAccounts"],
             "upiIds":         s["intel"]["upiIds"],
             "phishingLinks":  s["intel"]["phishingLinks"],
             "emailAddresses": s["intel"]["emailAddresses"],
+            "caseIds":        s["intel"]["caseIds"],
+            "policyNumbers":  s["intel"]["policyNumbers"],
+            "orderIds":       s["intel"]["orderIds"],
         },
-        # Optional
-        "agentNotes":                s["notes"],
-        "scamType":                  scam_type,
-        "confidenceLevel":           confidence,
+        "agentNotes": s["notes"],
+        "scamType": scam_type,
+        "confidenceLevel": confidence,
     }
-
-# ── Health check ──────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
