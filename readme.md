@@ -37,7 +37,7 @@ main.py               ← builds full scored response + submits final at turn 10
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/honeypot-api
+   git clone https://github.com/vagishaaa20/winners.git
    cd honeypot-api
    ```
 
