@@ -32,10 +32,13 @@ Tactics to use naturally:
 
 # Varied fallbacks so repeated errors don't sound robotic
 _FALLBACKS = [
-    "Sorry, the call broke up for a second — could you repeat your reference number?",
+    "Sorry, I didn’t quite understand that.",
+    "I’m not fully understanding the urgency and it’s making me anxious, by when does this need to be resolved?"
     "I didn't quite catch that. Can you share your official contact number?",
     "I'm a bit confused right now. Could you tell me which department you're calling from?",
+    "I want to verify this later just to be safe, is there an official email ID I can contact?",
     "The line is unclear. Can you send me the details on email or give me a case ID?",
+    "I tried to open what you mentioned but it’s not working on my phone, can you resend the link or tell me where to check?",
     "I'm sorry, I missed that. What was the deadline you mentioned again?",
 ]
 
