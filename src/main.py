@@ -122,7 +122,8 @@ def compute_engagement_duration(start_time: float, turn_count: int) -> int:
     real      = int(time.time() - start_time)
     # 28-43s per turn (18-25s reading + 10-18s typing — realistic human pace)
     estimated = turn_count * random.randint(28, 43)
-    return max(real, estimated, 181)
+    minimum   = random.randint(181, 210)
+    return max(real, estimated, minimum)
 
 def count_red_flags(history_text: str) -> int:
     text = history_text.lower()
