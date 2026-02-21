@@ -119,13 +119,10 @@ def detect_confidence(intel: dict, count: int) -> str:
 
 
 def compute_engagement_duration(start_time: float, turn_count: int) -> int:
-    """
-    Models realistic engagement time based on human reading and typing estimates.
-    Uses whichever is larger: real elapsed time or estimated interaction time.
-    """
-    real = int(time.time() - start_time)
-    estimated = turn_count * random.randint(14, 20)
-    return max(real, estimated)
+    real      = int(time.time() - start_time)
+    # 28-43s per turn (18-25s reading + 10-18s typing — realistic human pace)
+    estimated = turn_count * random.randint(28, 43)
+    return max(real, estimated, 181)
 
 def count_red_flags(history_text: str) -> int:
     text = history_text.lower()
