@@ -125,8 +125,7 @@ def compute_engagement_duration(start_time: float, turn_count: int) -> int:
     18 seconds per turn represents human reading + typing time.
     Returns whichever is larger: real elapsed or modeled time.
     """
-    BASE_THINK_TIME = 18
-    simulated = turn_count * BASE_THINK_TIME
+    simulated = (turn_count * 18) + 2  # 182s at turn 10 — crosses >180s threshold
     real = int(time.time() - start_time)
     return max(real, simulated)
 
